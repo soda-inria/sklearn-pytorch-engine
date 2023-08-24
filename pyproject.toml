@@ -1,0 +1,73 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sklearn-pytorch-engine"
+version = "0.1.0dev0"
+description = "Computational Engine for scikit-learn based on pytorch"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { file="LICENSE.txt" }
+maintainers = [
+  { name="Olivier Grisel", email="olivier.grisel@ensta.org" },
+  { name="Franck Charras", email="franck.charras@inria.fr" },
+]
+classifiers = [
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved",
+    "Programming Language :: Python",
+    "Topic :: Software Development",
+    "Topic :: Scientific/Engineering",
+    "Development Status :: 4 - Beta",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX",
+    "Operating System :: Unix",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: Implementation :: CPython"
+]
+
+
+dependencies = [
+    "scikit-learn",
+    "array_api_compat",
+    "torch"
+]
+
+
+[project.urls]
+"Homepage" = "https://github.com/soda-inria/sklearn-pytorch-engine"
+
+
+[project.entry-points.sklearn_engines]
+kmeans = "sklearn_pytorch_engine.kmeans.engine:KMeansEngine"
+
+
+[tool.black]
+line-length = 88
+target_version = ['py38', 'py39', 'py310']
+preview = true
+# Exclude irrelevant directories for formatting
+exclude = '''
+/(
+    \.eggs
+  | \.git
+  | \.mypy_cache
+  | \.vscode
+  | \.pytest_cache
+  | \.idea
+  | build
+  | dist
+)/
+'''
+
+[tool.isort]
+profile = "black"
+
+
+# TODO: move sections from setup.cfg to pyproject.toml when applicable
