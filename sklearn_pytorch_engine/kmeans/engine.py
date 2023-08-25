@@ -1,8 +1,5 @@
-import torch
-
-import math
-
 import contextlib
+import math
 import numbers
 import os
 from typing import Any, Dict
@@ -11,20 +8,18 @@ import numpy as np
 import scipy.sparse as sp
 import sklearn
 import sklearn.utils.validation as sklearn_validation
+import torch
 from sklearn.cluster._kmeans import KMeansCythonEngine
 from sklearn.exceptions import NotSupportedByEngineError
 from sklearn.utils import check_array, check_random_state
-from sklearn.utils.validation import _is_arraylike_not_scalar
 from sklearn.utils.extmath import stable_cumsum
+from sklearn.utils.validation import _is_arraylike_not_scalar
 
 from sklearn_pytorch_engine.testing import override_attr_context
-
-
 from sklearn_pytorch_engine.testing.config import (
-    has_fp64_support,
-    get_torch_default_device,
     get_torch_array_api_namespace,
-    to_pytorch_dtype,
+    get_torch_default_device,
+    has_fp64_support,
 )
 
 
@@ -192,6 +187,11 @@ class KMeansEngine(KMeansCythonEngine):
         n_clusters = self.estimator.n_clusters
         compute_dtype = X.dtype
 
+        if self.sample_weight_is_uniform:
+            sample_weight = torch.full(
+                (n_samples,), sample_weight, dtype=compute_dtype, device=device
+            )
+
         # Same retrial heuristic as scikit-learn (at least until <1.2)
         n_local_trials = 2 + int(np.log(n_clusters))
 
@@ -200,29 +200,46 @@ class KMeansEngine(KMeansCythonEngine):
         )
         indices = torch.empty(n_clusters, dtype=torch.int32, device=device)
 
-        first_center_idx = torch.randint(
-            n_samples,
-            (1,),
-            generator=self.random_state,
-            out=indices[0],
-            device=device,
-            dtype=indices.dtype,
-        )
+        if isinstance(self.random_state, np.random.RandomState):
+            sample_weight_cpu = sample_weight.cpu().numpy()
+            first_center_idx = self.random_state.choice(
+                n_samples, p=sample_weight_cpu / sample_weight_cpu.sum()
+            )
+            first_center_idx = torch.asarray(
+                [first_center_idx], dtype=indices.dtype, device=device
+            )
+            indices[0] = first_center_idx[0]
+            del sample_weight_cpu
+        else:
+            first_center_idx = torch.randint(
+                n_samples,
+                (1,),
+                generator=self.random_state,
+                out=indices[0],
+                device=device,
+                dtype=indices.dtype,
+            )
 
         first_center = centers[0] = X[first_center_idx]
 
-        closest_dist_sq = torch.cdist(first_center, X)
+        closest_dist_sq = torch.cdist(first_center, X).squeeze()
 
-        current_pot = closest_dist_sq * sample_weight
+        current_pot = torch.dot(closest_dist_sq, sample_weight)
 
         if isinstance(self.random_state, np.random.RandomState):
 
-            def _sample_candidate_ids(current_pot):
-                current_pot_ = current_pot.cpu().numpy()
+            def _sample_candidate_ids(closest_dist_sq, current_pot):
+                current_pot_ = current_pot.item()
+                weighted_closest_dist_sq = (
+                    (closest_dist_sq * sample_weight).cpu().numpy()
+                )
+
                 rand_vals = (
                     self.random_state.uniform(size=n_local_trials) * current_pot_
                 )
-                candidate_ids = np.searchsorted(stable_cumsum(current_pot_), rand_vals)
+                candidate_ids = np.searchsorted(
+                    stable_cumsum(weighted_closest_dist_sq), rand_vals
+                )
                 # XXX: numerical imprecision can result in a candidate_id out of range
                 np.clip(
                     candidate_ids, None, len(closest_dist_sq) - 1, out=candidate_ids
@@ -232,9 +249,9 @@ class KMeansEngine(KMeansCythonEngine):
 
         else:
 
-            def _sample_candidate_ids(current_pot):
+            def _sample_candidate_ids(closest_dist_sq, current_pot):
                 return torch.multinomial(
-                    current_pot,
+                    closest_dist_sq * sample_weight,
                     n_local_trials,
                     replacement=False,
                     generator=self.random_state,
@@ -245,7 +262,7 @@ class KMeansEngine(KMeansCythonEngine):
             # First, let's sample indices of candidates using a empirical cumulative
             # density function built using the potential of the samples and squared
             # distances to each sample's closest centroids.
-            candidate_ids = _sample_candidate_ids(current_pot)
+            candidate_ids = _sample_candidate_ids(closest_dist_sq, current_pot)
 
             # Now, for each (sample, candidate)-pair, compute the minimum between
             # their distance and the previous minimum.
@@ -385,7 +402,6 @@ class KMeansEngine(KMeansCythonEngine):
                 samples_far_from_center = torch.topk(
                     dist_to_nearest_centroid_sqz, n_empty_clusters
                 ).indices
-                new_centroids[empty_clusters_list] = X[samples_far_from_center]
                 new_assignments_idx[
                     samples_far_from_center
                 ] = empty_clusters_list.unsqueeze(1)
@@ -627,8 +643,6 @@ class KMeansEngine(KMeansCythonEngine):
         return euclidean_distances
 
     def _validate_data(self, X, reset=True):
-        accepted_dtypes = [np.float32]
-
         if self.device is not None:
             device = torch.device(self.device)
 
@@ -650,6 +664,12 @@ class KMeansEngine(KMeansCythonEngine):
                 self.estimator._output_dtype = np.float64
             else:
                 self.estimator._output_dtype = X_dtype
+
+        if hasattr(X, "__dlpack__"):
+            try:
+                X = torch.from_dlpack(X)
+            except Exception:
+                pass
 
         with _validate_with_array_api(device):
             try:
@@ -677,6 +697,9 @@ class KMeansEngine(KMeansCythonEngine):
         n_samples = X.shape[0]
         dtype = X.dtype
         device = X.device
+
+        self.sample_weight_is_uniform = False
+
         if sample_weight is None:
             self.sample_weight_is_uniform = True
             return torch.tensor(1, dtype=dtype, device=device)
