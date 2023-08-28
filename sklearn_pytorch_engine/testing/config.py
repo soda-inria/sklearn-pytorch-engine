@@ -1,10 +1,9 @@
-import torch
 from functools import lru_cache
-import array_api_compat
 
+import array_api_compat
 import numpy as np
 import pytest
-
+import torch
 
 _TORCH_ARRAY_API_NAMESPACE = (
     lambda: array_api_compat.get_namespace(torch.zeros(1, 1))
