@@ -20,6 +20,7 @@ from sklearn_pytorch_engine.testing.config import (
     get_torch_array_api_namespace,
     get_torch_default_device,
     has_fp64_support,
+    to_pytorch_dtype,
 )
 
 
@@ -114,7 +115,7 @@ class KMeansEngine(KMeansCythonEngine):
             tol = torch.mean(torch.var(X, dim=0)) * tol
         self.tol = tol
 
-        if self._is_in_testing_mode and X_mean is not None:
+        if self._is_in_testing_mode:
             X_mean = X_mean.cpu().numpy()
 
         self.X_mean = X_mean
@@ -498,7 +499,15 @@ class KMeansEngine(KMeansCythonEngine):
                     f"{centroid_shifts_sum} within tolerance {tol}."
                 )
 
-        if not strict_convergence:
+        # NB: if duplicate
+        if (
+            (not strict_convergence)
+            or
+            # NB: this condition is necessary ot pass sklearn
+            # `test_kmeans_warns_less_centers_than_unique_points` unit test.
+            # It ensures consistent behaviors in some extremely edge cases.
+            n_empty_clusters
+        ):
             _min_over_pairwise_distance(
                 X,
                 centroids,
@@ -520,6 +529,12 @@ class KMeansEngine(KMeansCythonEngine):
             .sum()
             .item()
         )
+
+        assignments_idx = assignments_idx.squeeze()
+
+        if self._is_in_testing_mode:
+            assignments_idx = assignments_idx.cpu().numpy().astype(np.int32)
+            centroids = centroids.cpu().numpy().astype(self.estimator._output_dtype)
 
         return assignments_idx.squeeze(), inertia, centroids, n_iteration
 
@@ -660,10 +675,13 @@ class KMeansEngine(KMeansCythonEngine):
             accepted_dtypes = [torch.float32]
 
         if self._is_in_testing_mode and reset:
-            if (X_dtype := np.dtype(X.dtype)) not in accepted_dtypes:
-                self.estimator._output_dtype = np.float64
-            else:
+            X_dtype = np.dtype(X.dtype)
+            dtype_pytorch = to_pytorch_dtype(X_dtype)
+
+            if dtype_pytorch in accepted_dtypes:
                 self.estimator._output_dtype = X_dtype
+            else:
+                self.estimator._output_dtype = np.float64
 
         if hasattr(X, "__dlpack__"):
             try:
@@ -744,7 +762,7 @@ class KMeansEngine(KMeansCythonEngine):
                 init,
                 dtype=X.dtype,
                 accept_sparse=False,
-                copy=False,
+                copy=True,
                 force_all_finite=True,
                 ensure_2d=True,
                 estimator=self.estimator,
