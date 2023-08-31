@@ -2,6 +2,7 @@ import contextlib
 import math
 import numbers
 import os
+from functools import wraps
 from typing import Any, Dict
 
 import numpy as np
@@ -22,6 +23,21 @@ from sklearn_pytorch_engine.testing.config import (
     has_fp64_support,
     to_pytorch_dtype,
 )
+
+
+def _use_engine_device(engine_method):
+    @wraps(engine_method)
+    def engine_method_(self, *args, **kwargs):
+        if self.device is None:
+            device = get_torch_default_device()
+            has_fp64_support(device)
+            return engine_method(self, *args, **kwargs)
+
+        has_fp64_support(self.device)
+        with torch.device(self.device):
+            return engine_method(self, *args, **kwargs)
+
+    return engine_method_
 
 
 class KMeansEngine(KMeansCythonEngine):
@@ -59,7 +75,9 @@ class KMeansEngine(KMeansCythonEngine):
         return value
 
     def __init__(self, estimator):
-        self.device = self._CONFIG.get("device", None)
+        self.device = self._CONFIG.get(
+            "device", os.getenv("SKLEARN_PYTORCH_ENGINE_DEFAULT_DEVICE", None)
+        )
         self.max_compute_buffer_bytes = self._CONFIG.get(
             "max_compute_buffer_bytes", 1073741824
         )
@@ -90,6 +108,7 @@ class KMeansEngine(KMeansCythonEngine):
 
         return True
 
+    @_use_engine_device
     def prepare_fit(self, X, y=None, sample_weight=None):
         estimator = self.estimator
 
@@ -120,7 +139,9 @@ class KMeansEngine(KMeansCythonEngine):
 
         self.X_mean = X_mean
 
-        use_numpy_random = isinstance(estimator.random_state, np.random.RandomState)
+        use_numpy_random = isinstance(
+            estimator.random_state, np.random.RandomState
+        ) or (X.device.type == "xpu")
         self.random_state = check_random_state(estimator.random_state)
         if not self._is_in_testing_mode and not use_numpy_random:
             self.random_state = torch.Generator(device=X.device).manual_seed(
@@ -135,6 +156,7 @@ class KMeansEngine(KMeansCythonEngine):
 
         return super().unshift_centers(X, best_centers)
 
+    @_use_engine_device
     def init_centroids(self, X, sample_weight):
         init = self.init
         n_clusters = self.estimator.n_clusters
@@ -157,7 +179,7 @@ class KMeansEngine(KMeansCythonEngine):
                 # TODO: what happens if we just keep torch rng ?
                 if self.sample_weight_is_uniform:
                     sample_weight_ = np.full(
-                        (n_samples,), sample_weight, dtype=np.float32
+                        (n_samples,), sample_weight.item(), dtype=np.float32
                     )
                 else:
                     sample_weight_ = sample_weight.cpu().numpy()
@@ -182,6 +204,7 @@ class KMeansEngine(KMeansCythonEngine):
 
         return centers
 
+    @_use_engine_device
     def _kmeans_plusplus(self, X, sample_weight):
         device = X.device
         n_samples, n_features = X.shape
@@ -221,9 +244,14 @@ class KMeansEngine(KMeansCythonEngine):
                 dtype=indices.dtype,
             )
 
-        first_center = centers[0] = X[first_center_idx]
+        # TODO: for some reason, X.__getitem__ sometimes (non deterministically)
+        # returns the wrong value if `first_center_idx` is on XPU, and some unit
+        # tests sometimes fail because of that. Minimal reproducer is not trivial,
+        # the exact conditions that trigger the issue are yet to understand.
+        first_center = centers[0] = X[[first_center_idx.item()]]
 
         closest_dist_sq = torch.cdist(first_center, X).squeeze()
+        torch.square(closest_dist_sq, out=closest_dist_sq)
 
         current_pot = torch.dot(closest_dist_sq, sample_weight)
 
@@ -274,6 +302,7 @@ class KMeansEngine(KMeansCythonEngine):
             # limit memory allocations up to a user-facing parameter value.
             # Which is better ?
             distance_to_candidates = torch.cdist(X[candidate_ids], X)
+            torch.square(distance_to_candidates, out=distance_to_candidates)
             torch.minimum(
                 closest_dist_sq, distance_to_candidates, out=distance_to_candidates
             )
@@ -291,6 +320,7 @@ class KMeansEngine(KMeansCythonEngine):
 
         return centers, indices
 
+    @_use_engine_device
     def kmeans_single(self, X, sample_weight, centers_init):
         centroids = centers_init
         max_iter = self.estimator.max_iter
@@ -401,7 +431,7 @@ class KMeansEngine(KMeansCythonEngine):
             if (n_empty_clusters := len(empty_clusters_list)) > 0:
                 # ???: should we pass `sorted=False` ?
                 samples_far_from_center = torch.topk(
-                    dist_to_nearest_centroid_sqz, n_empty_clusters
+                    dist_to_nearest_centroid_sqz, n_empty_clusters, sorted=False
                 ).indices
                 new_assignments_idx[
                     samples_far_from_center
@@ -465,6 +495,12 @@ class KMeansEngine(KMeansCythonEngine):
                     dim=0, index=new_assignments_idx.squeeze(), src=sample_weight
                 )
 
+            torch.where(
+                new_weight_in_clusters != 0,
+                new_weight_in_clusters,
+                torch.tensor(1, dtype=compute_dtype, device=device),
+                out=new_weight_in_clusters,
+            )
             new_centroids /= new_weight_in_clusters.unsqueeze(1)
 
             centroids, new_centroids = new_centroids, centroids
@@ -562,6 +598,7 @@ class KMeansEngine(KMeansCythonEngine):
 
         return len(torch.unique(best_labels))
 
+    @_use_engine_device
     def prepare_prediction(self, X, sample_weight):
         X = self._validate_data(X, reset=False)
         sample_weight = self._check_sample_weight(sample_weight, X)
@@ -581,6 +618,7 @@ class KMeansEngine(KMeansCythonEngine):
         _, inertia = self._get_labels_inertia(X, sample_weight, with_inertia=True)
         return inertia
 
+    @_use_engine_device
     def _get_labels_inertia(self, X, sample_weight, with_inertia=True):
         cluster_centers = self._check_init(
             self.estimator.cluster_centers_, X, copy=False
@@ -642,6 +680,7 @@ class KMeansEngine(KMeansCythonEngine):
         # inbetween fit and transform ? or remove prepare_transform ?
         return X
 
+    @_use_engine_device
     def get_euclidean_distances(self, X):
         X = self._validate_data(X, reset=False)
         cluster_centers = self._check_init(
@@ -784,7 +823,19 @@ def _validate_with_array_api(device):
                 f"Got order={order}, but enforcing a specific order is not "
                 "supported by this plugin."
             )
-        return torch.asarray(array, dtype=dtype, copy=copy, device=device)
+        if device is None:
+            device_ = get_torch_default_device()
+        else:
+            device_ = device
+        ret = torch.asarray(array, dtype=dtype, copy=copy, device=device_)
+
+        # HACK: work around issue with xpu backends where copy=True has the same effect
+        # than copy=None...
+        if hasattr(array, "data_ptr") and (ret.data_ptr() == array.data_ptr()):
+            return torch.clone(ret)
+
+        else:
+            return ret
 
     # TODO: when https://github.com/scikit-learn/scikit-learn/issues/25000 is
     #  solved remove those hacks.

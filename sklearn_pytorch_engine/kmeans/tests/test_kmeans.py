@@ -1,3 +1,4 @@
+import os
 from functools import lru_cache
 
 import numpy as np
@@ -28,7 +29,8 @@ def make_blobs(random_state):
 
 
 def torch_asarray(X, dtype):
-    return torch.asarray(X, dtype=to_pytorch_dtype(dtype))
+    device = os.getenv("SKLEARN_PYTORCH_ENGINE_TEST_INPUTS_DEVICE", "cpu")
+    return torch.asarray(X, dtype=to_pytorch_dtype(dtype), device=device)
 
 
 @pytest.mark.parametrize(
@@ -45,7 +47,6 @@ def test_kmeans_same_results(dtype, array_constr, test_attributes_auto_convert):
     random_seed = 42
     X, _ = make_blobs(random_state=random_seed)
     X_array = array_constr(X, dtype=dtype)
-
     X = X.astype(dtype)
 
     kmeans_truth = KMeans(algorithm="lloyd", max_iter=2, n_init=2, init="random")
@@ -318,23 +319,21 @@ def test_kmeans_plusplus_same_quality(dtype):
 
     # Those results confirm that both sklearn KMeans++ and ours have similar quality,
     # and are both very significantly better than random init.
-    #
-    # NB: the gap between scores_vanilla_kmeans_plusplus and
-    # scores_engine_kmeans_plusplus goes away with more iterations in the previous
-    # loop.
 
     assert_allclose(
         [
             np.mean(scores_random_init),
             np.mean(scores_vanilla_kmeans_plusplus),
-            np.mean(scores_engine_kmeans_plusplus),
         ],
         [
             -1827.22702,
             -892.39115,
-            -810.92723 if dtype == np.float64 else -916.392102,
         ],
     )
+
+    # Since RNG is different depending on the device that, only
+    # check for an upper bound on the value rather than hardcoding the value
+    assert np.mean(scores_engine_kmeans_plusplus) < 1000
 
 
 @pytest.mark.parametrize("dtype", float_dtype_params)
@@ -401,3 +400,12 @@ def test_kmeans_plusplus_dataorder():
     centers_fortran = asnumpy(centers_fortran)
 
     assert_allclose(centers_c, centers_fortran)
+
+
+def test_xpu_supports_torch_generator():
+    """This test will fail once the xpu backend supports on-device RNG with
+    torch.Generator RNG. From then on, please adapt the KMeans engine so that
+    it uses on-device torch.Generator rather than np.randon.RandomState, then
+    remove this unit test"""
+    with pytest.raises(Exception):
+        torch.Generator(device="xpu")
