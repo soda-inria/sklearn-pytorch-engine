@@ -1,4 +1,3 @@
-import os
 from functools import lru_cache
 
 import numpy as np
@@ -15,8 +14,12 @@ from sklearn.cluster.tests.test_k_means import n_clusters as n_clusters_sklearn_
 from sklearn.datasets import make_blobs as _make_blobs
 from sklearn.utils._testing import assert_allclose
 
+from sklearn_pytorch_engine._utils import to_pytorch_dtype
 from sklearn_pytorch_engine.kmeans.engine import KMeansEngine
-from sklearn_pytorch_engine.testing.config import float_dtype_params, to_pytorch_dtype
+from sklearn_pytorch_engine.testing.config import (
+    _torch_array_constr_on_device,
+    float_dtype_params,
+)
 
 
 def asnumpy(X):
@@ -28,17 +31,12 @@ def make_blobs(random_state):
     return _make_blobs(random_state=random_state)
 
 
-def torch_asarray(X, dtype):
-    device = os.getenv("SKLEARN_PYTORCH_ENGINE_TEST_INPUTS_DEVICE", "cpu")
-    return torch.asarray(X, dtype=to_pytorch_dtype(dtype), device=device)
-
-
 @pytest.mark.parametrize(
     "array_constr,test_attributes_auto_convert",
     [
         (np.asarray, False),
-        (torch_asarray, False),
-        (torch_asarray, True),
+        (_torch_array_constr_on_device, False),
+        (_torch_array_constr_on_device, True),
     ],
     ids=["numpy", "torch", "torch+convert"],
 )
@@ -339,7 +337,7 @@ def test_kmeans_plusplus_same_quality(dtype):
 @pytest.mark.parametrize("dtype", float_dtype_params)
 @pytest.mark.parametrize(
     "array_constr",
-    [np.asarray, torch_asarray],
+    [np.asarray, _torch_array_constr_on_device],
     ids=["numpy", "torch"],
 )
 def test_kmeans_plusplus_output(array_constr, dtype):

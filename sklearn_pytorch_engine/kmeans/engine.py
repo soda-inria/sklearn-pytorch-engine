@@ -16,13 +16,14 @@ from sklearn.utils import check_array, check_random_state
 from sklearn.utils.extmath import stable_cumsum
 from sklearn.utils.validation import _is_arraylike_not_scalar
 
-from sklearn_pytorch_engine.testing import override_attr_context
-from sklearn_pytorch_engine.testing.config import (
+from sklearn_pytorch_engine._utils import (
+    get_sklearn_pytorch_engine_default_device,
     get_torch_array_api_namespace,
     get_torch_default_device,
     has_fp64_support,
     to_pytorch_dtype,
 )
+from sklearn_pytorch_engine.testing import override_attr_context
 
 
 def _use_engine_device(engine_method):
@@ -70,13 +71,13 @@ class KMeansEngine(KMeansCythonEngine):
 
     @staticmethod
     def convert_to_sklearn_types(name, value):
-        if name in ["cluster_centers_", "labels_"]:
+        if name in {"cluster_centers_", "labels_"}:
             return value.cpu().numpy()
         return value
 
     def __init__(self, estimator):
         self.device = self._CONFIG.get(
-            "device", os.getenv("SKLEARN_PYTORCH_ENGINE_DEFAULT_DEVICE", None)
+            "device", get_sklearn_pytorch_engine_default_device()
         )
         self.max_compute_buffer_bytes = self._CONFIG.get(
             "max_compute_buffer_bytes", 1073741824
@@ -139,6 +140,10 @@ class KMeansEngine(KMeansCythonEngine):
 
         self.X_mean = X_mean
 
+        # Using np.random.RandomState can be useful:
+        # - for keeping compatibility with some sklearn tests
+        # - if the device backend does not support torch.Generator and
+        # has to fallback to CPU.
         use_numpy_random = isinstance(
             estimator.random_state, np.random.RandomState
         ) or (X.device.type == "xpu")
@@ -174,9 +179,6 @@ class KMeansEngine(KMeansCythonEngine):
         else:
             n_samples = X.shape[0]
             if isinstance(self.random_state, np.random.RandomState):
-                # use numpy rng to ensure reproducibility consistent with
-                # scikit learn tests
-                # TODO: what happens if we just keep torch rng ?
                 if self.sample_weight_is_uniform:
                     sample_weight_ = np.full(
                         (n_samples,), sample_weight.item(), dtype=np.float32
@@ -466,7 +468,7 @@ class KMeansEngine(KMeansCythonEngine):
 
             else:
                 # Multipliying with weights and then using `scatter_add_` could be
-                # fused together, yet again with a x2 - x3 speedup.
+                # fused together, yet again with a substantial speedup.
                 batch_start_idx = batch_end_idx = 0
                 for batch_idx in range(update_n_batches):
                     if batch_idx == update_n_full_batches:
@@ -535,7 +537,6 @@ class KMeansEngine(KMeansCythonEngine):
                     f"{centroid_shifts_sum} within tolerance {tol}."
                 )
 
-        # NB: if duplicate
         if (
             (not strict_convergence)
             or
@@ -579,7 +580,7 @@ class KMeansEngine(KMeansCythonEngine):
             return super().is_same_clustering(labels, best_labels, n_clusters)
 
         # TODO: this implementation relies on sort that is nlogn complexity. Is there
-        # a solution for linear complexity just using pytorch functions ?
+        # a solution for linear complexity using only pytorch functions ?
         sorting_index = torch.argsort(labels)
 
         groupby_equal_labels = torch.nonzero(torch.diff(labels[sorting_index]))
@@ -869,16 +870,18 @@ def _get_batch_properties(
     return batch_size, n_batches, n_full_batches, last_batch_size
 
 
+# fmt: off
 def _min_over_pairwise_distance(
-    X,  # IN    (n_samples, n_features)
-    centroids,  # IN    (n_clusters, n_feautres)
-    n_batches,  # PARAM int
-    n_full_batches,  # PARAM int
-    batch_size,  # PARAM int
-    last_batch_size,  # PARAM int
-    dist_to_nearest_centroid,  # OUT   (n_samples, n_clusters)
-    assignments_idx,  # OUT   (n_samples,)
+    X,                          # IN        (n_samples, n_features)
+    centroids,                  # IN        (n_clusters, n_feautres)
+    n_batches,                  # PARAM     int
+    n_full_batches,             # PARAM     int
+    batch_size,                 # PARAM     int
+    last_batch_size,            # PARAM     int
+    dist_to_nearest_centroid,   # OUT       (n_samples, n_clusters)
+    assignments_idx,            # OUT       (n_samples,)
 ):
+    # fmt: on
     """The result is returned in `dist_to_nearest_centroid` and `assignments_idx`
     arrays that are modified inplace"""
     # TODO: slice here so that pairwise_distance has a max size of 1GB
