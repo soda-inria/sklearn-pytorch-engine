@@ -31,10 +31,10 @@ jobs:
         pip install cython numpy scipy joblib threadpoolctl &&
         # Build and install
         pip install torch --index-url https://download.pytorch.org/whl/cpu &&
-        pip install pytest git+https://github.com/fcharras/scikit-learn.git@80f58bf10d2f8b8cb43f6253bbe13413985a1413#egg=scikit-learn -e .
+        pip install pytest git+https://github.com/fcharras/scikit-learn.git@2ccfc8c4bdf66db005d7681757b4145842944fb9#egg=scikit-learn -e .
 
 
-    - name: Run sklearn_numba_dpex tests
+    - name: Run sklearn_pytorch_engine tests
       run: pytest -v sklearn_pytorch_engine/
 
       # TODO: run those tests in a separate pipeline
@@ -47,5 +47,5 @@ jobs:
       # that fitted attributes and outputs are numpy arrays. Currently this behavior is
       # activated when the environment variable SKLEARN_PYTORCH_ENGINE_TESTING_MODE is set
       # to 1.
-    - name: Run sklearn test suites with sklearn_numba_dpex engines
+    - name: Run sklearn test suites with sklearn_pytorch_engine
       run: SKLEARN_RUN_FLOAT32_TESTS=1 SKLEARN_PYTORCH_ENGINE_TESTING_MODE=1 pytest -v --sklearn-engine-provider sklearn_pytorch_engine --pyargs sklearn.cluster.tests.test_k_means

@@ -62,8 +62,8 @@ class KMeansEngine(KMeansCythonEngine):
 
     # This class attribute can alter globally the attributes `device` and `order` of
     # future instances. It is only used for testing purposes, using
-    # `sklearn_numba_dpex.testing.config.override_attr_context` context, for instance
-    # in the benchmark script.
+    # `sklearn_pytorch_engine.testing.config.override_attr_context` context, for
+    # instance in the benchmark script.
     # For normal usage, the compute will follow the *compute follows data* principle.
     _CONFIG: Dict[str, Any] = dict()
 
