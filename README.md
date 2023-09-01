@@ -1,4 +1,4 @@
-# sklearn-pytorch0engine
+# sklearn-pytorch-engine
 
 Experimental plugin for scikit-learn that implements a backend for (some) scikit-learn
 estimators, written in `pytorch`, so that it benefits from `pytorch` ability to
