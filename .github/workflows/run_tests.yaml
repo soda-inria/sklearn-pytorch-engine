@@ -1,0 +1,51 @@
+name: Run tests
+on:
+  pull_request:
+  push: { branches: main }
+
+jobs:
+  run-test-suite:
+    name: Run test suite
+    runs-on: ubuntu-latest
+    container: python:latest
+      # TODO: use a gpu-compatible image, setup runners with a compatible gpu and activate
+      # gpu passthrough options
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+      # Use a pinned commit from the `feature/engine-api` branch at
+      # https://github.com/scikit-learn/scikit-learn.git to enable smooth
+      # synchronization with the development of this branch.
+      # Development tracker: https://github.com/scikit-learn/scikit-learn/pull/25535/
+      # TODO: Remove this step when the plugin API is officially released
+    - name: Install pytest, sklearn branch "feature/engine-api", and sklearn-numba-dpex
+      # Use official scikit-learn build guide at
+      # https://scikit-learn.org/stable/developers/advanced_installation.html#install-bleeding-edge
+
+      run: |
+        apt-get update --quiet &&
+        # Install prerequisites
+        apt-get install -y build-essential python3-dev &&
+        pip install cython numpy scipy joblib threadpoolctl &&
+        # Build and install
+        pip install torch --index-url https://download.pytorch.org/whl/cpu &&
+        pip install pytest git+https://github.com/fcharras/scikit-learn.git@2ccfc8c4bdf66db005d7681757b4145842944fb9#egg=scikit-learn -e .
+
+
+    - name: Run sklearn_pytorch_engine tests
+      run: pytest -v sklearn_pytorch_engine/
+
+      # TODO: run those tests in a separate pipeline
+      # NB: `sklearn_pytorch_engine` set the estimators to output arrays of type
+      # `torch.tensor` and store fitted attributes with this same type.
+      # This behavior is not compatible with sklearn unit tests, that expect numpy
+      # arrays or at least arrays that would closely mimic the NumPy Python API. To
+      # keep compatibility with sklearn unit tests the engine must be set to a
+      # different behavior where its methods are wrapped in data conversion steps so
+      # that fitted attributes and outputs are numpy arrays. Currently this behavior is
+      # activated when the environment variable SKLEARN_PYTORCH_ENGINE_TESTING_MODE is set
+      # to 1.
+    - name: Run sklearn test suites with sklearn_pytorch_engine
+      run: SKLEARN_RUN_FLOAT32_TESTS=1 SKLEARN_PYTORCH_ENGINE_TESTING_MODE=1 pytest -v --sklearn-engine-provider sklearn_pytorch_engine --pyargs sklearn.cluster.tests.test_k_means

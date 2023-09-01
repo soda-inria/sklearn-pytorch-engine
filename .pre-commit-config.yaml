@@ -18,10 +18,10 @@ repos:
     rev: v0.961
     hooks:
      -  id: mypy
-        files: sklearn_numba_dpex/
+        files: sklearn_pytorch_engine/
         additional_dependencies: [pytest==6.2.4]
 -   repo: https://github.com/PyCQA/isort
     rev: 5.12.0
     hooks:
     -   id: isort
-        files: sklearn_numba_dpex/
+        files: sklearn_pytorch_engine/
