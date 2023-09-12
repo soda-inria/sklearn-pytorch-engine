@@ -30,11 +30,8 @@ def _use_engine_device(engine_method):
     @wraps(engine_method)
     def engine_method_(self, *args, **kwargs):
         if self.device is None:
-            device = get_torch_default_device()
-            has_fp64_support(device)
             return engine_method(self, *args, **kwargs)
 
-        has_fp64_support(self.device)
         with torch.device(self.device):
             return engine_method(self, *args, **kwargs)
 
@@ -833,7 +830,7 @@ def _validate_with_array_api(device):
         # HACK: work around issue with xpu backends where copy=True has the same effect
         # than copy=None...
         if hasattr(array, "data_ptr") and (ret.data_ptr() == array.data_ptr()):
-            return torch.clone(ret)
+            return torch.clone(ret).detach()
 
         else:
             return ret
