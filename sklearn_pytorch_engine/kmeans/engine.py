@@ -197,7 +197,13 @@ class KMeansEngine(KMeansCythonEngine):
                 else:
                     p = sample_weight
 
-                centers_idx = torch.multinomial(p, n_clusters, replacement=False)
+                centers_idx = _torch_sample_ids_without_replacement(
+                    p,
+                    p.sum(),
+                    n_clusters,
+                    generator=self.random_state,
+                    rand_dtype=p.dtype,
+                )
 
             centers = X[centers_idx, :]
 
@@ -276,13 +282,22 @@ class KMeansEngine(KMeansCythonEngine):
                 return torch.asarray(candidate_ids, device=device)
 
         else:
+            _rand_vals_buffer = torch.empty(
+                n_local_trials, dtype=compute_dtype, device=device
+            )
+            _candidate_ids_buffer = torch.empty(
+                n_local_trials, dtype=torch.int64, device=device
+            )
 
             def _sample_candidate_ids(closest_dist_sq, current_pot):
-                return torch.multinomial(
+                return _torch_sample_ids_without_replacement(
                     closest_dist_sq * sample_weight,
+                    current_pot,
                     n_local_trials,
-                    replacement=False,
                     generator=self.random_state,
+                    rand_dtype=compute_dtype,
+                    _rand_vals_buffer=_rand_vals_buffer,
+                    out=_candidate_ids_buffer,
                 )
 
         # Pick the remaining n_clusters-1 points
@@ -904,3 +919,35 @@ def _min_over_pairwise_distance(
         assignments_idx[-1, -1].item()
 
         batch_start_idx += batch_size
+
+
+def _torch_sample_ids_without_replacement(
+        weights,
+        weights_sum,
+        num_samples,
+        *,
+        generator=None,
+        rand_dtype=None,
+        out=None,
+        _rand_vals_buffer=None
+):
+    # NB: workaround to the limitation of torch.multinomial to 2**24 categories.
+    # Please refer to https://github.com/pytorch/pytorch/issues/2576
+    # If fixed, you could use the following implementation instead:
+    # return torch.multinomial(
+    #     input,
+    #     num_samples,
+    #     replacement=False,
+    #     generator=self.random_state,
+    # )
+    rand_vals = torch.rand(
+        num_samples, generator=generator, dtype=rand_dtype, out=_rand_vals_buffer
+    ) * weights_sum
+    out = torch.searchsorted(
+        torch.cumsum(weights, dim=0), rand_vals, out=out,
+    )
+    # XXX: numerical imprecision can result in a candidate_id out of range
+    torch.clip(
+        out, None, len(weights) - 1, out=out
+    )
+    return out
