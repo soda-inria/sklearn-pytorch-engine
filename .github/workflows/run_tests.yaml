@@ -7,7 +7,7 @@ jobs:
   run-test-suite:
     name: Run test suite
     runs-on: ubuntu-latest
-    container: python:latest
+    container: python:3.11
       # TODO: use a gpu-compatible image, setup runners with a compatible gpu and activate
       # gpu passthrough options
 
