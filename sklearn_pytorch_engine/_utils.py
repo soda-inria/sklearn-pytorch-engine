@@ -24,10 +24,7 @@ def get_torch_default_device():
 
 
 def get_sklearn_pytorch_engine_default_device():
-    device = os.getenv("SKLEARN_PYTORCH_ENGINE_DEFAULT_DEVICE", None)
-    if device is None:
-        device = get_torch_default_device()
-    return device
+    return os.getenv("SKLEARN_PYTORCH_ENGINE_DEFAULT_DEVICE", None)
 
 
 @lru_cache
